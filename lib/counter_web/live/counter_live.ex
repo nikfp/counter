@@ -2,6 +2,8 @@ defmodule CounterWeb.CounterLive do
   use Phoenix.LiveView
   import CounterWeb.CoreComponents
 
+  @topic "counter"
+
   def render(assigns) do
     ~H"""
     <.flash_group flash={@flash} />
@@ -29,6 +31,8 @@ defmodule CounterWeb.CounterLive do
   def mount(_params, _session, socket) do
     count = 0
 
+    Phoenix.PubSub.subscribe(Counter.PubSub, @topic)
+
     {:ok,
      socket
      |> assign(:count, count)
@@ -37,36 +41,32 @@ defmodule CounterWeb.CounterLive do
      |> assign(:timer, nil)}
   end
 
-  def handle_event("increment", _unsigned_params, %{assigns: %{timer: timer}} = socket) do
-    count = socket.assigns.count + 1
-
-    case timer do
-      nil -> nil
-      _ -> Process.cancel_timer(timer)
-    end
+  def handle_event(
+        "increment",
+        _unsigned_params,
+        %{assigns: %{timer: timer, count: count}} = socket
+      ) do
+    Phoenix.PubSub.broadcast_from!(Counter.PubSub, self(), @topic, %{
+      event: "increment",
+      payload: %{message: "Hit Increment"}
+    })
 
     {:noreply,
      socket
-     |> assign(:count, count)
-     |> clear_flash()
-     |> put_flash(:info, "Incremented")
-     |> schedule_clear_flash()}
+     |> increment(count, timer)}
   end
 
-  def handle_event("decrement", _unsigned_params, %{assigns: %{timer: timer}} = socket) do
-    count = socket.assigns.count - 1
+  def handle_event(
+        "decrement",
+        _unsigned_params,
+        %{assigns: %{count: count, timer: timer}} = socket
+      ) do
+    Phoenix.PubSub.broadcast_from!(Counter.PubSub, self(), @topic, %{
+      event: "decrement",
+      payload: %{message: "Hit Decrement"}
+    })
 
-    case timer do
-      nil -> nil
-      _ -> Process.cancel_timer(timer)
-    end
-
-    {:noreply,
-     socket
-     |> assign(:count, count)
-     |> clear_flash()
-     |> put_flash(:info, "Decremented")
-     |> schedule_clear_flash()}
+    {:noreply, socket |> decrement(count, timer)}
   end
 
   def handle_event("dothings", %{"input" => input}, socket) do
@@ -78,8 +78,54 @@ defmodule CounterWeb.CounterLive do
     {:noreply, socket |> assign(:timer, nil) |> clear_flash()}
   end
 
+  def handle_info(
+        %{event: "increment"} = message,
+        %{assigns: %{timer: timer, count: count}} = socket
+      ) do
+    IO.inspect(message)
+    {:noreply, socket |> increment(count, timer)}
+  end
+
+  def handle_info(
+        %{event: "decrement"} = message,
+        %{assigns: %{timer: timer, count: count}} = socket
+      ) do
+    IO.inspect(message)
+    {:noreply, socket |> decrement(count, timer)}
+  end
+
   defp schedule_clear_flash(socket) do
     timer = Process.send_after(self(), :clear_flash, 1500)
     socket |> assign(:timer, timer)
+  end
+
+  defp increment(socket, count, timer) do
+    count = count + 1
+
+    case timer do
+      nil -> nil
+      _ -> Process.cancel_timer(timer)
+    end
+
+    socket
+    |> assign(:count, count)
+    |> clear_flash()
+    |> put_flash(:info, "Incremented")
+    |> schedule_clear_flash()
+  end
+
+  defp decrement(socket, count, timer) do
+    count = socket.assigns.count - 1
+
+    case timer do
+      nil -> nil
+      _ -> Process.cancel_timer(timer)
+    end
+
+    socket
+    |> assign(:count, count)
+    |> clear_flash()
+    |> put_flash(:info, "Decremented")
+    |> schedule_clear_flash()
   end
 end
